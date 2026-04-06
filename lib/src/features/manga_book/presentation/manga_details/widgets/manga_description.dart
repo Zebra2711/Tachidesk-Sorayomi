@@ -129,37 +129,39 @@ class MangaDescription extends HookConsumerWidget {
               ],
             ),
           ),
-        if (isExpanded.value)
-          Padding(
-            padding: KEdgeInsets.h16.size,
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              // alignment: WrapAlignment.spaceBetween,
-              children: [
-                ...manga.genre.map<Widget>(
-                  (e) => Chip(label: Text(e)),
-                )
-              ],
-            ),
-          )
-        else
-          Padding(
-            padding: KEdgeInsets.h16.size,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
+        if (manga.genre.where((e) => e.isNotBlank).isNotEmpty) ...[
+          if (isExpanded.value)
+            Padding(
+              padding: KEdgeInsets.h16.size,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                // alignment: WrapAlignment.spaceBetween,
                 children: [
-                  ...manga.genre.map<Widget>(
-                    (e) => Padding(
-                      padding: KEdgeInsets.h4.size,
-                      child: Chip(label: Text(e)),
-                    ),
+                  ...manga.genre.where((e) => e.isNotBlank).map<Widget>(
+                    (e) => Chip(label: Text(e)),
                   )
                 ],
               ),
+            )
+          else
+            Padding(
+              padding: KEdgeInsets.h16.size,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    ...manga.genre.where((e) => e.isNotBlank).map<Widget>(
+                      (e) => Padding(
+                        padding: KEdgeInsets.h4.size,
+                        child: Chip(label: Text(e)),
+                      ),
+                    )
+                  ],
+                ),
+              ),
             ),
-          ),
+        ],
       ],
     );
   }
