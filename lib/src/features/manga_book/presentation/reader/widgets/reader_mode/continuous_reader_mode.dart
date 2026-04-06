@@ -67,10 +67,9 @@ class ContinuousReaderMode extends HookConsumerWidget {
     final infinityScrollingEnabled =
         ref.watch(infinityScrollingModeEnabledProvider).ifNull(false);
 
-    // Use infinity mode for webtoon with infinity scrolling enabled
+    // Use infinity mode for webtoon, continuous/single vertical
     if (infinityScrollingEnabled &&
-        scrollDirection == Axis.vertical &&
-        !showSeparator) {
+        scrollDirection == Axis.vertical) {
       return InfinityContinuousReaderMode(
         manga: manga,
         chapter: chapter,
