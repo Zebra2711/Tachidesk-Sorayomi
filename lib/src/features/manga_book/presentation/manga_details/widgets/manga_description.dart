@@ -96,7 +96,10 @@ class MangaDescription extends HookConsumerWidget {
                   final display = isExpanded.value ? lines : lines.take(3).toList();
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: display.map((line) => Text(line)).toList(),
+                    children: [
+                      ...display.map((line) => Text(line)),
+                      const SizedBox(height: 24),
+                    ],
                   );
                 }),
                 InkWell(
