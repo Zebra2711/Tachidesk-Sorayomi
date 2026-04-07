@@ -91,10 +91,14 @@ class MangaDescription extends HookConsumerWidget {
             child: Stack(
               alignment: AlignmentDirectional.bottomStart,
               children: [
-                Text(
-                  "${manga.description}\n",
-                  maxLines: isExpanded.value ? null : 3,
-                ),
+                Builder(builder: (context) {
+                  final lines = (manga.description ?? '').split('\n');
+                  final display = isExpanded.value ? lines : lines.take(3).toList();
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: display.map((line) => Text(line)).toList(),
+                  );
+                }),
                 InkWell(
                   child: Container(
                     margin: EdgeInsets.zero,
@@ -129,7 +133,7 @@ class MangaDescription extends HookConsumerWidget {
               ],
             ),
           ),
-        if (manga.genre.where((e) => e.isNotBlank).isNotEmpty) ...[
+        if ((manga.genre ?? []).where((e) => e.isNotBlank).isNotEmpty) ...[
           if (isExpanded.value)
             Padding(
               padding: KEdgeInsets.h16.size,
