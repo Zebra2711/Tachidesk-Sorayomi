@@ -1238,6 +1238,7 @@
     "readerVolumeTapSubtitle": "Navigate with Volume Keys",
     "readerIgnoreSafeAreaToggle": "Ignore Safe Area",
     "readerIgnoreSafeAreaToggleDescription": "Allow content to extend into notch and home indicator areas",
+    "skipDupChapters": "Skip duplicate chapters",
     "reddit": "Reddit",
     "refresh": "Refresh",
     "migrate": "Migrate",

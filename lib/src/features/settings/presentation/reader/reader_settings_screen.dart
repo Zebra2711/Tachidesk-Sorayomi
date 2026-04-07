@@ -26,6 +26,7 @@ import 'widgets/reader_scroll_animation_tile/reader_scroll_animation_tile.dart';
 import 'widgets/reader_swipe_toggle_tile/reader_swipe_chapter_toggle_tile.dart';
 import 'widgets/reader_volume_tap_invert_tile/reader_volume_tap_invert_tile.dart';
 import 'widgets/reader_volume_tap_tile/reader_volume_tap_tile.dart';
+import 'widgets/reader_skip_dup_chapters_tile/reader_skip_dup_chapters_tile.dart';
 
 class ReaderSettingsScreen extends ConsumerWidget {
   const ReaderSettingsScreen({super.key});
@@ -43,6 +44,7 @@ class ReaderSettingsScreen extends ConsumerWidget {
           const ReaderInitialOverlayTile(),
           const SwipeChapterToggleTile(),
           const ReaderLastPageSwipeTile(),
+          const ReaderSkipDupChaptersTile(),
           const ReaderInfinityScrollingModeTile(),
           const ReaderScrollAnimationTile(),
           const ReaderPaddingSlider(),

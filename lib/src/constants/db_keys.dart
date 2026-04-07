@@ -57,6 +57,7 @@ enum DBKeys {
   flexScheme(FlexScheme.material),
   historyEnabled(true),
   historyRetentionDays(90),
+  skipDupChapters(true),
   // Timeout Settings
   serverRequestTimeout(5000), // milliseconds
   autoRefreshOnTimeout(false),

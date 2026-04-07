@@ -47,9 +47,11 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-
 *.g.dart
 *.freezed.dart
 *.graphql.dart
 **/__generated__
 lib/src/l10n/generated
+
+# FVM Version Cache
+.fvm/

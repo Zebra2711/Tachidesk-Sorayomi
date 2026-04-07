@@ -418,7 +418,7 @@ class InfinityContinuousChapterLoader {
       // Primary strategy: Use scrollTo with calculated alignment
       await scrollController.scrollTo(
         index: primaryIndex,
-        duration: Duration.zero, // Instant, no animation
+        duration: const Duration(milliseconds: 1), // Minimal duration to avoid assertion
         alignment: preciseAlignment,
       );
 

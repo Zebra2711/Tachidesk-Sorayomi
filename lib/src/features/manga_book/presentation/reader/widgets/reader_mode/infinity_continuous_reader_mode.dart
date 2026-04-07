@@ -12,6 +12,7 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
+import '../../../../../../constants/db_keys.dart';
 import '../../../../../../utils/extensions/custom_extensions.dart';
 import '../../../../../../utils/misc/app_utils.dart';
 import '../../../../../../utils/misc/toast/toast.dart';
@@ -20,6 +21,7 @@ import '../../../../../history/presentation/history_controller.dart';
 import '../../../../../settings/presentation/reader/widgets/reader_infinity_scrolling_mode_tile/reader_infinity_scrolling_mode_tile.dart';
 import '../../../../../settings/presentation/reader/widgets/reader_pinch_to_zoom/reader_pinch_to_zoom.dart';
 import '../../../../../settings/presentation/reader/widgets/reader_scroll_animation_tile/reader_scroll_animation_tile.dart';
+import '../../../../../settings/presentation/reader/widgets/reader_skip_dup_chapters_tile/reader_skip_dup_chapters_tile.dart';
 import '../../../../data/manga_book/manga_book_repository.dart';
 import '../../../../domain/chapter/chapter_model.dart';
 import '../../../../domain/chapter_batch/chapter_batch_model.dart';
@@ -397,6 +399,8 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
                   lastStartScrollTime,
                   scrollController,
                   positionsListener,
+                  manga,
+                  currentVisibleChapter,
                 );
               }
             }
@@ -523,6 +527,8 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
     ObjectRef<DateTime?> lastStartScrollTime,
     ItemScrollController scrollController,
     ItemPositionsListener positionsListener,
+    MangaDto manga,
+    ValueNotifier<ChapterDto> currentVisibleChapter,
   ) {
     final positions = positionsListener.itemPositions.value.toList();
     if (positions.isEmpty) return;
@@ -580,7 +586,50 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
         nextPrevChapterPair?.first != null) {
       if (lastEndScrollTime.value == null ||
           now.difference(lastEndScrollTime.value!) > scrollCooldown) {
-        final nextChapter = nextPrevChapterPair!.first!;
+        var nextChapter = nextPrevChapterPair!.first!;
+        final skipDupChapters =
+            ref.watch(skipDupChaptersProvider).ifNull();
+
+        // Skip duplicate chapters if enabled
+        if (skipDupChapters) {
+          final currentChapterNumber =
+              currentVisibleChapter.value.chapterNumber ?? 0;
+          final chapterList = ref
+              .read(mangaChapterListWithFilterProvider(
+                  mangaId: manga.id))
+              .valueOrNull;
+          final isAscSorted = ref.watch(mangaChapterSortDirectionProvider) ??
+              DBKeys.chapterSortDirection.initial;
+
+          if (chapterList != null && chapterList.isNotEmpty) {
+            final currentIndex = chapterList.indexWhere(
+                (element) => element.id == currentVisibleChapter.value.id);
+
+            if (currentIndex != -1) {
+              // Find the first non-duplicate chapter in the direction we're going
+              if (isAscSorted) {
+                // Ascending: search forward
+                for (int i = currentIndex + 1;
+                    i < chapterList.length;
+                    i++) {
+                  if (chapterList[i].chapterNumber != currentChapterNumber) {
+                    nextChapter = chapterList[i];
+                    break;
+                  }
+                }
+              } else {
+                // Descending: search backward
+                for (int i = currentIndex - 1; i >= 0; i--) {
+                  if (chapterList[i].chapterNumber !=
+                      currentChapterNumber) {
+                    nextChapter = chapterList[i];
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
 
         lastEndScrollTime.value = now;
         InfinityContinuousChapterLoader.loadNextChapter(
@@ -612,7 +661,51 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
                 positions, InfinityContinuousConfig.minVisibleAreaThreshold);
 
         if (isStable) {
-          final previousChapter = nextPrevChapterPair!.second!;
+          var previousChapter = nextPrevChapterPair!.second!;
+          final skipDupChapters =
+              ref.watch(skipDupChaptersProvider).ifNull();
+
+          // Skip duplicate chapters if enabled
+          if (skipDupChapters) {
+            final currentChapterNumber =
+                currentVisibleChapter.value.chapterNumber ?? 0;
+            final chapterList = ref
+                .read(mangaChapterListWithFilterProvider(
+                    mangaId: manga.id))
+                .valueOrNull;
+            final isAscSorted = ref.watch(mangaChapterSortDirectionProvider) ??
+                DBKeys.chapterSortDirection.initial;
+
+            if (chapterList != null && chapterList.isNotEmpty) {
+              final currentIndex = chapterList.indexWhere(
+                  (element) => element.id == currentVisibleChapter.value.id);
+
+              if (currentIndex != -1) {
+                // Find the first non-duplicate chapter in the direction we're going
+                if (isAscSorted) {
+                  // Ascending: search backward
+                  for (int i = currentIndex - 1; i >= 0; i--) {
+                    if (chapterList[i].chapterNumber !=
+                        currentChapterNumber) {
+                      previousChapter = chapterList[i];
+                      break;
+                    }
+                  }
+                } else {
+                  // Descending: search forward
+                  for (int i = currentIndex + 1;
+                      i < chapterList.length;
+                      i++) {
+                    if (chapterList[i].chapterNumber !=
+                        currentChapterNumber) {
+                      previousChapter = chapterList[i];
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+          }
 
           lastStartScrollTime.value = now;
           InfinityContinuousChapterLoader.loadPreviousChapter(

@@ -34,6 +34,8 @@ class DirectionalSwipeGestureHandler extends HookWidget {
     required this.onNextPage,
     required this.onPreviousPage,
     required this.pageController,
+    this.onNextChapter,
+    this.onPreviousChapter,
   });
 
   final Widget child;
@@ -52,6 +54,8 @@ class DirectionalSwipeGestureHandler extends HookWidget {
   final VoidCallback onNextPage;
   final VoidCallback onPreviousPage;
   final PageController? pageController;
+  final VoidCallback? onNextChapter;
+  final VoidCallback? onPreviousChapter;
 
   @override
   Widget build(BuildContext context) {
@@ -233,7 +237,9 @@ class DirectionalSwipeGestureHandler extends HookWidget {
 
   /// Navigate to next chapter with graceful fallback
   void _navigateToNextChapterWithFallback(BuildContext context) {
-    if (prevNextChapterPair?.first != null) {
+    if (onNextChapter != null) {
+      onNextChapter!();
+    } else if (prevNextChapterPair?.first != null) {
       try {
         ReaderRoute(
           mangaId: mangaId,
@@ -250,7 +256,9 @@ class DirectionalSwipeGestureHandler extends HookWidget {
 
   /// Navigate to previous chapter with graceful fallback
   void _navigateToPreviousChapterWithFallback(BuildContext context) {
-    if (prevNextChapterPair?.second != null) {
+    if (onPreviousChapter != null) {
+      onPreviousChapter!();
+    } else if (prevNextChapterPair?.second != null) {
       try {
         ReaderRoute(
           mangaId: mangaId,
