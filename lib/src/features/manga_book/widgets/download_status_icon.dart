@@ -69,16 +69,21 @@ class DownloadStatusIcon extends HookConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isLoading = useState(false);
+    final wasFinished = useRef(false);
+    final previousDownloadUpdate = useRef<DownloadDto?>(null);
 
     final toast = ref.watch(toastProvider);
     final downloadUpdate = ref.watch(downloadsFromIdProvider(chapter.id));
     useEffect(() {
       if (downloadUpdate?.state == DownloadState.FINISHED) {
-        Future.microtask(
-            () => newUpdatePair(ref, (value) => isLoading.value = value));
+        wasFinished.value = true;
       }
+      if (previousDownloadUpdate.value != null && downloadUpdate == null) {
+        wasFinished.value = true;
+      }
+      previousDownloadUpdate.value = downloadUpdate;
       return;
-    }, [downloadUpdate?.state]);
+    }, [downloadUpdate]);
 
     if (isLoading.value) {
       return Padding(
@@ -103,7 +108,7 @@ class DownloadStatusIcon extends HookConsumerWidget {
           );
         }
       } else {
-        if (isDownloaded) {
+        if (isDownloaded || wasFinished.value) {
           return IconButton(
             icon: const Icon(Icons.check_circle_rounded),
             onPressed: () async {
