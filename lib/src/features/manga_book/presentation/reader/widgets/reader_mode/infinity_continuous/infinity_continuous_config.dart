@@ -55,4 +55,8 @@ class InfinityContinuousConfig {
 
   /// Interactive viewer max scale for pinch to zoom
   static const double maxZoomScale = 5.0;
+
+  /// Maximum number of chapters to keep in memory
+  /// Older chapters are unloaded to prevent memory leaks
+  static const int maxLoadedChapters = 3;
 }

@@ -4,24 +4,30 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
-import '../../../../../../constants/db_keys.dart';
+import '../../../../../../constants/endpoints.dart';
+import '../../../../../../constants/enum.dart';
+import '../../../../../../global_providers/global_providers.dart';
 import '../../../../../../utils/extensions/custom_extensions.dart';
 import '../../../../../../utils/misc/app_utils.dart';
 import '../../../../../../utils/misc/toast/toast.dart';
 import '../../../../../../widgets/server_image.dart';
+import '../../../../../settings/presentation/server/widget/client/server_port_tile/server_port_tile.dart';
+import '../../../../../settings/presentation/server/widget/client/server_url_tile/server_url_tile.dart';
+import '../../../../../settings/presentation/server/widget/credential_popup/credentials_popup.dart';
 import '../../../../../history/presentation/history_controller.dart';
 import '../../../../../settings/presentation/reader/widgets/reader_infinity_scrolling_mode_tile/reader_infinity_scrolling_mode_tile.dart';
 import '../../../../../settings/presentation/reader/widgets/reader_pinch_to_zoom/reader_pinch_to_zoom.dart';
 import '../../../../../settings/presentation/reader/widgets/reader_scroll_animation_tile/reader_scroll_animation_tile.dart';
-import '../../../../../settings/presentation/reader/widgets/reader_skip_dup_chapters_tile/reader_skip_dup_chapters_tile.dart';
 import '../../../../data/manga_book/manga_book_repository.dart';
 import '../../../../domain/chapter/chapter_model.dart';
 import '../../../../domain/chapter_batch/chapter_batch_model.dart';
@@ -253,6 +259,7 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
 
     // Track completed chapters to avoid duplicate API calls
     final completedChapterIds = useRef<Set<int>>({});
+    final preloadedChapterIds = useRef<Set<int>>({});
 
     // Update current index based on scroll position and track chapter completion
     useEffect(() {
@@ -313,6 +320,17 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
             });
           }
         }
+
+        // Prefetch a small number of adjacent chapter images when nearing a boundary.
+        InfinityContinuousReaderMode._prefetchAdjacentChapterImages(
+          ref,
+          context,
+          loadedChapters.value,
+          nextPrevChapterPair.value,
+          currentVisibleChapter,
+          currentChapterPageIndex,
+          preloadedChapterIds.value,
+        );
       }
 
       positionsListener.itemPositions.addListener(listener);
@@ -503,6 +521,105 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
     return image;
   }
 
+  static const int _adjacentPrefetchPageThreshold = 3;
+  static const int _adjacentPrefetchPageCount = 2;
+
+  static Future<void> _prefetchAdjacentChapterImages(
+    WidgetRef ref,
+    BuildContext context,
+    List<({ChapterPagesDto pages, ChapterDto chapter, int chapterId})>
+        loadedChapters,
+    ({ChapterDto? first, ChapterDto? second})? nextPrevChapterPair,
+    ValueNotifier<ChapterDto> currentVisibleChapter,
+    ValueNotifier<int> currentChapterPageIndex,
+    Set<int> preloadedChapterIds,
+  ) async {
+    if (nextPrevChapterPair == null || loadedChapters.isEmpty) return;
+
+    final currentChapterId = currentVisibleChapter.value.id;
+    final currentChapterData = loadedChapters
+        .where((item) => item.chapterId == currentChapterId)
+        .toList();
+    if (currentChapterData.isEmpty) return;
+
+    final chapterData = currentChapterData.first;
+    final totalPages = chapterData.pages.pages.length;
+    final currentPage = currentChapterPageIndex.value;
+
+    if (currentPage >= totalPages - _adjacentPrefetchPageThreshold) {
+      final nextChapter = nextPrevChapterPair.first;
+      if (nextChapter != null &&
+          !preloadedChapterIds.contains(nextChapter.id) &&
+          !loadedChapters
+              .any((item) => item.chapterId == nextChapter.id)) {
+        preloadedChapterIds.add(nextChapter.id);
+        unawaited(_prefetchChapterImages(ref, context, nextChapter.id,
+            isNext: true));
+      }
+    }
+
+    if (currentPage <= _adjacentPrefetchPageThreshold) {
+      final previousChapter = nextPrevChapterPair.second;
+      if (previousChapter != null &&
+          !preloadedChapterIds.contains(previousChapter.id) &&
+          !loadedChapters
+              .any((item) => item.chapterId == previousChapter.id)) {
+        preloadedChapterIds.add(previousChapter.id);
+        unawaited(_prefetchChapterImages(ref, context, previousChapter.id,
+            isNext: false));
+      }
+    }
+  }
+
+  static Future<void> _prefetchChapterImages(
+    WidgetRef ref,
+    BuildContext context,
+    int chapterId, {
+    required bool isNext,
+  }) async {
+    try {
+      final chapterPages = await ref
+          .read(chapterPagesProvider(chapterId: chapterId).future);
+      if (chapterPages == null || chapterPages.pages.isEmpty) return;
+
+      final Iterable<String> imageUrls = isNext
+          ? chapterPages.pages.take(_adjacentPrefetchPageCount)
+          : chapterPages.pages.skip(
+              (chapterPages.pages.length - _adjacentPrefetchPageCount)
+                  .clamp(0, chapterPages.pages.length),
+            );
+
+      for (final imageUrl in imageUrls) {
+        final provider = CachedNetworkImageProvider(
+          _buildPrefetchImageUrl(ref, imageUrl),
+          headers: _buildPrefetchHttpHeaders(ref),
+        );
+        await precacheImage(provider, context);
+      }
+    } catch (_) {
+      // Ignore prefetch failures.
+    }
+  }
+
+  static String _buildPrefetchImageUrl(WidgetRef ref, String imageUrl) {
+    return "${Endpoints.baseApi(
+      baseUrl: ref.read(serverUrlProvider),
+      port: ref.read(serverPortProvider),
+      addPort: ref.read(serverPortToggleProvider).ifNull(),
+      appendApiToUrl: false,
+    )}$imageUrl";
+  }
+
+  static Map<String, String>? _buildPrefetchHttpHeaders(WidgetRef ref) {
+    final authType = ref.read(authTypeKeyProvider);
+    final basicToken = ref.read(credentialsProvider);
+
+    if (authType == AuthType.basic && basicToken != null) {
+      return {"Authorization": basicToken};
+    }
+    return null;
+  }
+
   /// Handles scroll updates to detect boundary scroll attempts
   /// Since ScrollablePositionedList doesn't generate OverscrollNotification,
   /// we need to detect when user is trying to scroll beyond boundaries
@@ -586,50 +703,7 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
         nextPrevChapterPair?.first != null) {
       if (lastEndScrollTime.value == null ||
           now.difference(lastEndScrollTime.value!) > scrollCooldown) {
-        var nextChapter = nextPrevChapterPair!.first!;
-        final skipDupChapters =
-            ref.watch(skipDupChaptersProvider).ifNull();
-
-        // Skip duplicate chapters if enabled
-        if (skipDupChapters) {
-          final currentChapterNumber =
-              currentVisibleChapter.value.chapterNumber ?? 0;
-          final chapterList = ref
-              .read(mangaChapterListWithFilterProvider(
-                  mangaId: manga.id))
-              .valueOrNull;
-          final isAscSorted = ref.watch(mangaChapterSortDirectionProvider) ??
-              DBKeys.chapterSortDirection.initial;
-
-          if (chapterList != null && chapterList.isNotEmpty) {
-            final currentIndex = chapterList.indexWhere(
-                (element) => element.id == currentVisibleChapter.value.id);
-
-            if (currentIndex != -1) {
-              // Find the first non-duplicate chapter in the direction we're going
-              if (isAscSorted) {
-                // Ascending: search forward
-                for (int i = currentIndex + 1;
-                    i < chapterList.length;
-                    i++) {
-                  if (chapterList[i].chapterNumber != currentChapterNumber) {
-                    nextChapter = chapterList[i];
-                    break;
-                  }
-                }
-              } else {
-                // Descending: search backward
-                for (int i = currentIndex - 1; i >= 0; i--) {
-                  if (chapterList[i].chapterNumber !=
-                      currentChapterNumber) {
-                    nextChapter = chapterList[i];
-                    break;
-                  }
-                }
-              }
-            }
-          }
-        }
+        final nextChapter = nextPrevChapterPair!.first!;
 
         lastEndScrollTime.value = now;
         InfinityContinuousChapterLoader.loadNextChapter(
@@ -639,6 +713,7 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
           loadingNext,
           hasReachedEnd,
           context,
+          currentVisibleChapter: currentVisibleChapter,
         );
       }
     }
@@ -661,51 +736,7 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
                 positions, InfinityContinuousConfig.minVisibleAreaThreshold);
 
         if (isStable) {
-          var previousChapter = nextPrevChapterPair!.second!;
-          final skipDupChapters =
-              ref.watch(skipDupChaptersProvider).ifNull();
-
-          // Skip duplicate chapters if enabled
-          if (skipDupChapters) {
-            final currentChapterNumber =
-                currentVisibleChapter.value.chapterNumber ?? 0;
-            final chapterList = ref
-                .read(mangaChapterListWithFilterProvider(
-                    mangaId: manga.id))
-                .valueOrNull;
-            final isAscSorted = ref.watch(mangaChapterSortDirectionProvider) ??
-                DBKeys.chapterSortDirection.initial;
-
-            if (chapterList != null && chapterList.isNotEmpty) {
-              final currentIndex = chapterList.indexWhere(
-                  (element) => element.id == currentVisibleChapter.value.id);
-
-              if (currentIndex != -1) {
-                // Find the first non-duplicate chapter in the direction we're going
-                if (isAscSorted) {
-                  // Ascending: search backward
-                  for (int i = currentIndex - 1; i >= 0; i--) {
-                    if (chapterList[i].chapterNumber !=
-                        currentChapterNumber) {
-                      previousChapter = chapterList[i];
-                      break;
-                    }
-                  }
-                } else {
-                  // Descending: search forward
-                  for (int i = currentIndex + 1;
-                      i < chapterList.length;
-                      i++) {
-                    if (chapterList[i].chapterNumber !=
-                        currentChapterNumber) {
-                      previousChapter = chapterList[i];
-                      break;
-                    }
-                  }
-                }
-              }
-            }
-          }
+          final previousChapter = nextPrevChapterPair!.second!;
 
           lastStartScrollTime.value = now;
           InfinityContinuousChapterLoader.loadPreviousChapter(
@@ -717,6 +748,7 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
             scrollController,
             positionsListener,
             context,
+            currentVisibleChapter: currentVisibleChapter,
           );
         }
       }
@@ -751,28 +783,6 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
       int index,
       List<({ChapterPagesDto pages, ChapterDto chapter, int chapterId})>
           loadedChapters) {
-    final isChapterBoundary =
-        InfinityContinuousUtils.isChapterBoundary(index, loadedChapters);
-
-    if (!isChapterBoundary) {
-      return const SizedBox
-          .shrink(); // No separator for pages within the same chapter
-    }
-
-    // Double-check: ensure we have multiple chapters loaded before showing separator
-    if (loadedChapters.length <= 1) {
-      return const SizedBox
-          .shrink(); // Don't show separator if only one chapter is loaded
-    }
-
-    // Determine if this is a chapter start or end
-    final separatorInfo = InfinityContinuousChapterSeparator.getSeparatorInfo(
-        index, loadedChapters);
-    if (separatorInfo == null) return const SizedBox.shrink();
-
-    return InfinityContinuousChapterSeparator(
-      chapterName: separatorInfo.chapterName,
-      isChapterStart: separatorInfo.isChapterStart,
-    );
+    return const SizedBox.shrink();
   }
 }

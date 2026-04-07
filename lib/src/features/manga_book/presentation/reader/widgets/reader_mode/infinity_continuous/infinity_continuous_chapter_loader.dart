@@ -10,10 +10,14 @@ import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
+import '../../../../../../../constants/db_keys.dart';
+import '../../../../../../../utils/extensions/custom_extensions.dart';
 import '../../../../../../../utils/logger/logger.dart';
 import '../../../../../domain/chapter/chapter_model.dart';
 import '../../../../../domain/chapter_page/chapter_page_model.dart';
 import '../../../controller/reader_controller.dart';
+import '../../../../../../settings/presentation/reader/widgets/reader_skip_dup_chapters_tile/reader_skip_dup_chapters_tile.dart';
+import '../../../../../../../features/manga_book/presentation/manga_details/controller/manga_details_controller.dart';
 import 'infinity_continuous_config.dart';
 import 'infinity_continuous_feedback.dart';
 import 'infinity_continuous_utils.dart';
@@ -40,6 +44,36 @@ class _ScrollState {
 class InfinityContinuousChapterLoader {
   const InfinityContinuousChapterLoader._();
 
+  /// Clean up old chapters to prevent memory leaks
+  /// Keeps only 3 chapters: current, previous, and next
+  static void _cleanupOldChapters(
+    ValueNotifier<
+            List<({ChapterPagesDto pages, ChapterDto chapter, int chapterId})>>
+        loadedChapters,
+    ValueNotifier<ChapterDto> currentVisibleChapter,
+  ) {
+    if (loadedChapters.value.length <= 3) return;
+
+    final currentChapterId = currentVisibleChapter.value.id;
+    final currentIndex = loadedChapters.value
+        .indexWhere((item) => item.chapterId == currentChapterId);
+
+    if (currentIndex == -1) return;
+
+    // Keep only: previous (i-1), current (i), next (i+1)
+    final keepIndices = <int>{
+      if (currentIndex > 0) currentIndex - 1,
+      currentIndex,
+      if (currentIndex < loadedChapters.value.length - 1) currentIndex + 1,
+    };
+
+    // Update to only keep these three chapters
+    loadedChapters.value = [
+      for (int i = 0; i < loadedChapters.value.length; i++)
+        if (keepIndices.contains(i)) loadedChapters.value[i],
+    ];
+  }
+
   /// Load next chapter
   static Future<void> loadNextChapter(
     WidgetRef ref,
@@ -49,43 +83,78 @@ class InfinityContinuousChapterLoader {
         loadedChapters,
     ValueNotifier<bool> loadingNext,
     ValueNotifier<bool> hasReachedEnd,
-    BuildContext? context,
-  ) async {
+    BuildContext? context, {
+    ValueNotifier<ChapterDto>? currentVisibleChapter,
+  }) async {
     loadingNext.value = true;
 
-    // Show loading feedback
-    if (context != null && context.mounted) {
-      InfinityContinuousFeedback.showLoadingNextChapterFeedback(
-        context,
-        nextChapter.name,
-      );
+    // Determine which chapter to actually load (handle duplicate skipping)
+    ChapterDto chapterToLoad = nextChapter;
+    if (currentVisibleChapter != null) {
+      final skipDupChapters =
+          ref.watch(skipDupChaptersProvider).ifNull();
+      if (skipDupChapters) {
+        final currentChapterNumber =
+            currentVisibleChapter.value.chapterNumber ?? 0;
+        final chapterList = ref
+            .read(mangaChapterListWithFilterProvider(
+                mangaId: nextChapter.mangaId))
+            .valueOrNull;
+        final isAscSorted = ref.watch(mangaChapterSortDirectionProvider) ??
+            DBKeys.chapterSortDirection.initial;
+
+        if (chapterList != null && chapterList.isNotEmpty) {
+          final currentIndex = chapterList.indexWhere(
+              (element) => element.id == currentVisibleChapter.value.id);
+          final nextIndex = chapterList.indexWhere(
+              (element) => element.id == nextChapter.id);
+
+          if (currentIndex != -1 && nextIndex != -1) {
+            if (nextChapter.chapterNumber == currentChapterNumber) {
+              // Next chapter is a duplicate, find the real next non-duplicate
+              if (isAscSorted) {
+                for (int i = nextIndex + 1; i < chapterList.length; i++) {
+                  if (chapterList[i].chapterNumber != currentChapterNumber) {
+                    chapterToLoad = chapterList[i];
+                    break;
+                  }
+                }
+              } else {
+                for (int i = nextIndex - 1; i >= 0; i--) {
+                  if (chapterList[i].chapterNumber != currentChapterNumber) {
+                    chapterToLoad = chapterList[i];
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
 
     try {
       final ChapterPagesDto? nextChapterPages = await ref
-          .read(chapterPagesProvider(chapterId: nextChapter.id).future);
+          .read(chapterPagesProvider(chapterId: chapterToLoad.id).future);
 
       if (nextChapterPages != null) {
         // Check if chapter is already loaded to avoid duplicates
         final alreadyLoaded = loadedChapters.value
-            .any((item) => item.chapterId == nextChapter.id);
+            .any((item) => item.chapterId == chapterToLoad.id);
 
         if (!alreadyLoaded) {
           loadedChapters.value = [
             ...loadedChapters.value,
             (
               pages: nextChapterPages,
-              chapter: nextChapter,
-              chapterId: nextChapter.id
+              chapter: chapterToLoad,
+              chapterId: chapterToLoad.id
             ),
           ];
 
-          // Show success feedback
-          if (context != null && context.mounted) {
-            InfinityContinuousFeedback.showNextChapterLoadedFeedback(
-              context,
-              nextChapter.name,
-            );
+          // Clean up old chapters to prevent memory leaks
+          if (currentVisibleChapter != null) {
+            _cleanupOldChapters(loadedChapters, currentVisibleChapter);
           }
         }
       } else {
@@ -125,35 +194,74 @@ class InfinityContinuousChapterLoader {
     ValueNotifier<bool> hasReachedStart,
     ItemScrollController? scrollController,
     ItemPositionsListener? positionsListener,
-    BuildContext? context,
-  ) async {
+    BuildContext? context, {
+    ValueNotifier<ChapterDto>? currentVisibleChapter,
+  }) async {
     loadingPrevious.value = true;
 
-    // Show loading feedback
-    if (context != null && context.mounted) {
-      InfinityContinuousFeedback.showLoadingPreviousChapterFeedback(
-        context,
-        previousChapter.name,
-      );
+    // Determine which chapter to actually load (handle duplicate skipping)
+    ChapterDto chapterToLoad = previousChapter;
+    if (currentVisibleChapter != null) {
+      final skipDupChapters =
+          ref.watch(skipDupChaptersProvider).ifNull();
+      if (skipDupChapters) {
+        final currentChapterNumber =
+            currentVisibleChapter.value.chapterNumber ?? 0;
+        final chapterList = ref
+            .read(mangaChapterListWithFilterProvider(
+                mangaId: previousChapter.mangaId))
+            .valueOrNull;
+        final isAscSorted = ref.watch(mangaChapterSortDirectionProvider) ??
+            DBKeys.chapterSortDirection.initial;
+
+        if (chapterList != null && chapterList.isNotEmpty) {
+          final currentIndex = chapterList.indexWhere(
+              (element) => element.id == currentVisibleChapter.value.id);
+          final prevIndex = chapterList.indexWhere(
+              (element) => element.id == previousChapter.id);
+
+          if (currentIndex != -1 && prevIndex != -1) {
+            if (previousChapter.chapterNumber == currentChapterNumber) {
+              // Previous chapter is a duplicate, find the real previous non-duplicate
+              if (isAscSorted) {
+                for (int i = prevIndex - 1; i >= 0; i--) {
+                  if (chapterList[i].chapterNumber != currentChapterNumber) {
+                    chapterToLoad = chapterList[i];
+                    break;
+                  }
+                }
+              } else {
+                for (int i = prevIndex + 1; i < chapterList.length; i++) {
+                  if (chapterList[i].chapterNumber != currentChapterNumber) {
+                    chapterToLoad = chapterList[i];
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
 
     try {
       final ChapterPagesDto? prevChapterPages = await ref
-          .read(chapterPagesProvider(chapterId: previousChapter.id).future);
+          .read(chapterPagesProvider(chapterId: chapterToLoad.id).future);
 
       if (prevChapterPages != null) {
         // Check if chapter is already loaded to avoid duplicates
         final alreadyLoaded = loadedChapters.value
-            .any((item) => item.chapterId == previousChapter.id);
+            .any((item) => item.chapterId == chapterToLoad.id);
 
         if (!alreadyLoaded) {
           await _loadPreviousChapterWithScrollPreservation(
             prevChapterPages,
-            previousChapter,
+            chapterToLoad,
             loadedChapters,
             scrollController,
             positionsListener,
             context,
+            currentVisibleChapter,
           );
         }
       } else {
@@ -162,7 +270,7 @@ class InfinityContinuousChapterLoader {
         if (context != null && context.mounted) {
           InfinityContinuousFeedback.showChapterLoadFailedFeedback(
             context,
-            previousChapter.name,
+            chapterToLoad.name,
             isNext: false,
           );
         }
@@ -173,7 +281,7 @@ class InfinityContinuousChapterLoader {
       if (context != null && context.mounted) {
         InfinityContinuousFeedback.showChapterLoadFailedFeedback(
           context,
-          previousChapter.name,
+          chapterToLoad.name,
           isNext: false,
         );
       }
@@ -192,6 +300,7 @@ class InfinityContinuousChapterLoader {
     ItemScrollController? scrollController,
     ItemPositionsListener? positionsListener,
     BuildContext? context,
+    ValueNotifier<ChapterDto>? currentVisibleChapter,
   ) async {
     if (scrollController == null || positionsListener == null) {
       // Simple case: no scroll controller, just add the chapter
@@ -204,11 +313,9 @@ class InfinityContinuousChapterLoader {
         ...loadedChapters.value,
       ];
 
-      if (context != null && context.mounted) {
-        InfinityContinuousFeedback.showPreviousChapterLoadedFeedback(
-          context,
-          previousChapter.name,
-        );
+      // Clean up old chapters to prevent memory leaks
+      if (currentVisibleChapter != null) {
+        _cleanupOldChapters(loadedChapters, currentVisibleChapter);
       }
       return;
     }
@@ -226,11 +333,9 @@ class InfinityContinuousChapterLoader {
         ...loadedChapters.value,
       ];
 
-      if (context != null && context.mounted) {
-        InfinityContinuousFeedback.showPreviousChapterLoadedFeedback(
-          context,
-          previousChapter.name,
-        );
+      // Clean up old chapters to prevent memory leaks
+      if (currentVisibleChapter != null) {
+        _cleanupOldChapters(loadedChapters, currentVisibleChapter);
       }
       return;
     }
@@ -246,6 +351,7 @@ class InfinityContinuousChapterLoader {
       scrollState,
       newChapterPageCount,
       context,
+      currentVisibleChapter,
     );
   }
 
@@ -347,6 +453,7 @@ class InfinityContinuousChapterLoader {
     _ScrollState scrollState,
     int newChapterPageCount,
     BuildContext? context,
+    ValueNotifier<ChapterDto>? currentVisibleChapter,
   ) async {
     // Calculate new indices after insertion
     final newPrimaryIndex = scrollState.primaryIndex + newChapterPageCount;
@@ -367,6 +474,11 @@ class InfinityContinuousChapterLoader {
           ...loadedChapters.value,
         ];
 
+        // Clean up old chapters to prevent memory leaks
+        if (currentVisibleChapter != null) {
+          _cleanupOldChapters(loadedChapters, currentVisibleChapter);
+        }
+
         // Wait for the next frame to ensure the list has been rebuilt
         await WidgetsBinding.instance.endOfFrame;
 
@@ -378,23 +490,8 @@ class InfinityContinuousChapterLoader {
           newSecondaryIndex,
           scrollState.secondaryAlignment,
         );
-
-        // Show success feedback after successful restoration
-        if (context != null && context.mounted) {
-          InfinityContinuousFeedback.showPreviousChapterLoadedFeedback(
-            context,
-            previousChapter.name,
-          );
-        }
       } catch (e) {
         logger.w('Failed to perform atomic chapter insertion: $e');
-        // Fallback: still show success feedback even if scroll restoration fails
-        if (context != null && context.mounted) {
-          InfinityContinuousFeedback.showPreviousChapterLoadedFeedback(
-            context,
-            previousChapter.name,
-          );
-        }
       }
     });
   }
