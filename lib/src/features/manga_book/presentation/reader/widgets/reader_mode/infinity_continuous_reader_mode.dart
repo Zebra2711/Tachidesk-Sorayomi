@@ -4,7 +4,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-import 'dart:async';
+import 'dart:async' show scheduleMicrotask, unawaited, Timer;
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -211,6 +211,25 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
     ]);
 
     // Track chapter loading states
+    final prevFirstChapterIdRef = useRef<int>(chapter.id);
+
+    useEffect(() {
+      final curr = loadedChapters.value;
+      if (curr.isEmpty) return null;
+      final currFirstId = curr.first.chapterId;
+      if (currFirstId != prevFirstChapterIdRef.value) {
+        final prependedPages = curr.first.pages.pages.length;
+        scheduleMicrotask(() {
+          if (scrollController.isAttached) {
+            scrollController.jumpTo(index: prependedPages - 1);
+          }
+        });
+        prevFirstChapterIdRef.value = currFirstId;
+      }
+      return null;
+    }, [loadedChapters.value]);
+
+    // Track chapter loading states
     final loadingNext = useState(false);
     final loadingPrevious = useState(false);
     final hasReachedEnd = useState(false);
@@ -229,12 +248,12 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
         useState<({ChapterDto? first, ChapterDto? second})?>(null);
 
     // Debouncing for user feedback to prevent spam
-    final lastEndFeedbackTime = useRef<DateTime?>(null);
-    final lastStartFeedbackTime = useRef<DateTime?>(null);
+    final lastEndFeedbackTime = useState<DateTime?>(null);
+    final lastStartFeedbackTime = useState<DateTime?>(null);
 
     // Debouncing for chapter loading to prevent spam
-    final lastEndScrollTime = useRef<DateTime?>(null);
-    final lastStartScrollTime = useRef<DateTime?>(null);
+    final lastEndScrollTime = useState<DateTime?>(null);
+    final lastStartScrollTime = useState<DateTime?>(null);
 
     // Get next and previous chapters for the currently visible chapter
     useEffect(() {
@@ -261,80 +280,102 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
     final completedChapterIds = useRef<Set<int>>({});
     final preloadedChapterIds = useRef<Set<int>>({});
 
+    // Preload last page of previous chapter on initial open
+    useEffect(() {
+      final prev = nextPrevChapterPair.value?.second;
+      if (prev != null && !preloadedChapterIds.value.contains(prev.id)) {
+        preloadedChapterIds.value.add(prev.id);
+        unawaited(_prefetchChapterImages(ref, context, prev.id, isNext: false));
+      }
+      return null;
+    }, [nextPrevChapterPair.value]);
+  
+    // Debounce timer for position updates to improve scroll smoothness
+    final positionUpdateTimer = useRef<Timer?>(null);
+
     // Update current index based on scroll position and track chapter completion
     useEffect(() {
       void listener() {
-        final List<ItemPosition> positions =
-            positionsListener.itemPositions.value.toList();
-        if (positions.isEmpty) return;
+        // Cancel any pending update
+        positionUpdateTimer.value?.cancel();
 
-        // Update current index for UI display and track visible chapter
-        InfinityContinuousUtils.updateCurrentIndexAndChapter(
-          positions,
-          currentIndex,
-          loadedChapters.value,
-          currentVisibleChapter,
-          currentChapterPageIndex,
-          InfinityContinuousConfig.minVisibleAreaThreshold,
-        );
+        // Debounce position updates to reduce frequency during active scrolling
+        positionUpdateTimer.value = Timer(const Duration(milliseconds: 100), () {
+          final List<ItemPosition> positions =
+              positionsListener.itemPositions.value.toList();
+          if (positions.isEmpty) return;
 
-        // Check for completed chapters and mark them as read
-        final completedChapters = InfinityContinuousUtils.getCompletedChapters(
-          positions,
-          loadedChapters.value,
-          InfinityContinuousConfig.minVisibleAreaThreshold,
-        );
+          // Update current index for UI display and track visible chapter
+          InfinityContinuousUtils.updateCurrentIndexAndChapter(
+            positions,
+            currentIndex,
+            loadedChapters.value,
+            currentVisibleChapter,
+            currentChapterPageIndex,
+            InfinityContinuousConfig.minVisibleAreaThreshold,
+          );
 
-        // Mark completed chapters as read (only if not already processed)
-        for (final completedChapter in completedChapters) {
-          if (!completedChapter.isRead &&
-              !completedChapterIds.value.contains(completedChapter.id)) {
-            // Add to processed set to avoid duplicate calls
-            completedChapterIds.value = {
-              ...completedChapterIds.value,
-              completedChapter.id,
-            };
+          // Check for completed chapters and mark them as read
+          final completedChapters = InfinityContinuousUtils.getCompletedChapters(
+            positions,
+            loadedChapters.value,
+            InfinityContinuousConfig.minVisibleAreaThreshold,
+          );
 
-            // Asynchronously mark the chapter as read without blocking the UI
-            AsyncValue.guard(
-              () => ref.read(mangaBookRepositoryProvider).putChapter(
-                    chapterId: completedChapter.id,
-                    patch: ChapterChange(
-                      isRead: true,
-                      lastPageRead: 0, // Reset to 0 when fully read
+          // Mark completed chapters as read (only if not already processed)
+          for (final completedChapter in completedChapters) {
+            if (!completedChapter.isRead &&
+                !completedChapterIds.value.contains(completedChapter.id)) {
+              // Add to processed set to avoid duplicate calls
+              completedChapterIds.value = {
+                ...completedChapterIds.value,
+                completedChapter.id,
+              };
+
+              // Asynchronously mark the chapter as read without blocking the UI
+              AsyncValue.guard(
+                () => ref.read(mangaBookRepositoryProvider).putChapter(
+                      chapterId: completedChapter.id,
+                      patch: ChapterChange(
+                        isRead: true,
+                        lastPageRead: 0, // Reset to 0 when fully read
+                      ),
                     ),
-                  ),
-            ).then((result) {
-              if (result.hasError && context.mounted) {
-                // Remove from processed set if failed, so we can retry
-                completedChapterIds.value = {...completedChapterIds.value}
-                  ..remove(completedChapter.id);
-                // Optional: Show error toast if chapter marking fails
-                result.showToastOnError(ref.read(toastProvider));
-              } else {
-                // Invalidate relevant providers to refresh UI
-                ref.invalidate(chapterProvider(chapterId: completedChapter.id));
-                ref.invalidate(mangaChapterListProvider(mangaId: manga.id));
-                ref.invalidate(readingHistoryProvider);
-              }
-            });
+              ).then((result) {
+                if (result.hasError && context.mounted) {
+                  // Remove from processed set if failed, so we can retry
+                  completedChapterIds.value = {...completedChapterIds.value}
+                    ..remove(completedChapter.id);
+                  // Optional: Show error toast if chapter marking fails
+                  result.showToastOnError(ref.read(toastProvider));
+                } else {
+                  // Invalidate relevant providers to refresh UI
+                  ref.invalidate(chapterProvider(chapterId: completedChapter.id));
+                  ref.invalidate(mangaChapterListProvider(mangaId: manga.id));
+                  ref.invalidate(readingHistoryProvider);
+                }
+              });
+            }
           }
-        }
 
-        // Prefetch a small number of adjacent chapter images when nearing a boundary.
-        InfinityContinuousReaderMode._prefetchAdjacentChapterImages(
-          ref,
-          context,
-          loadedChapters.value,
-          nextPrevChapterPair.value,
-          currentVisibleChapter,
-          currentChapterPageIndex,
-          preloadedChapterIds.value,
-        );
+          // Prefetch a small number of adjacent chapter images when nearing a boundary.
+          InfinityContinuousReaderMode._prefetchAdjacentChapterImages(
+            ref,
+            context,
+            loadedChapters.value,
+            nextPrevChapterPair.value,
+            currentVisibleChapter,
+            currentChapterPageIndex,
+            preloadedChapterIds.value,
+          );
+        });
       }
 
       positionsListener.itemPositions.addListener(listener);
-      return () => positionsListener.itemPositions.removeListener(listener);
+      return () {
+        positionsListener.itemPositions.removeListener(listener);
+        positionUpdateTimer.value?.cancel();
+      };
     }, []);
 
     // Notify page changes for UI updates
@@ -398,7 +439,7 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
           onNotification: (ScrollNotification notification) {
             // Custom overscroll detection based on Stack Overflow solution
             // https://stackoverflow.com/questions/67091643/check-for-overscroll-in-pageview-flutter
-            if (notification is ScrollUpdateNotification) {
+            if (notification is ScrollUpdateNotification || notification is OverscrollNotification) {
               // Debounce scroll handling to prevent rapid-fire events during chapter loading
               if (!loadingNext.value && !loadingPrevious.value) {
                 _handleCustomOverscroll(
@@ -523,6 +564,7 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
 
   static const int _adjacentPrefetchPageThreshold = 3;
   static const int _adjacentPrefetchPageCount = 2;
+  static const int _adjacentPrefetchPrevPageCount = 1;
 
   static Future<void> _prefetchAdjacentChapterImages(
     WidgetRef ref,
@@ -571,6 +613,28 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
     }
   }
 
+  static Future<void> _prefetchFirstImageOfChapter(
+    WidgetRef ref,
+    BuildContext context,
+    int chapterId,
+  ) async {
+    try {
+      final chapterPages = await ref
+          .read(chapterPagesProvider(chapterId: chapterId).future);
+      if (chapterPages == null || chapterPages.pages.isEmpty) return;
+
+      // Only prefetch the first image
+      final firstImageUrl = chapterPages.pages.first;
+      final provider = CachedNetworkImageProvider(
+        _buildPrefetchImageUrl(ref, firstImageUrl),
+        headers: _buildPrefetchHttpHeaders(ref),
+      );
+      await precacheImage(provider, context);
+    } catch (_) {
+      // Ignore prefetch failures.
+    }
+  }
+
   static Future<void> _prefetchChapterImages(
     WidgetRef ref,
     BuildContext context,
@@ -585,7 +649,7 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
       final Iterable<String> imageUrls = isNext
           ? chapterPages.pages.take(_adjacentPrefetchPageCount)
           : chapterPages.pages.skip(
-              (chapterPages.pages.length - _adjacentPrefetchPageCount)
+              (chapterPages.pages.length - _adjacentPrefetchPrevPageCount)
                   .clamp(0, chapterPages.pages.length),
             );
 
@@ -627,7 +691,7 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
   /// Based on Stack Overflow solution: https://stackoverflow.com/questions/67091643/check-for-overscroll-in-pageview-flutter
   /// Detects when user tries to scroll beyond boundaries by monitoring scroll metrics
   void _handleCustomOverscroll(
-    ScrollUpdateNotification notification,
+    ScrollNotification notification,
     WidgetRef ref,
     BuildContext context,
     ({ChapterDto? first, ChapterDto? second})? nextPrevChapterPair,
@@ -638,10 +702,10 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
     ValueNotifier<bool> loadingPrevious,
     ValueNotifier<bool> hasReachedEnd,
     ValueNotifier<bool> hasReachedStart,
-    ObjectRef<DateTime?> lastEndFeedbackTime,
-    ObjectRef<DateTime?> lastStartFeedbackTime,
-    ObjectRef<DateTime?> lastEndScrollTime,
-    ObjectRef<DateTime?> lastStartScrollTime,
+    ValueNotifier<DateTime?> lastEndFeedbackTime,
+    ValueNotifier<DateTime?> lastStartFeedbackTime,
+    ValueNotifier<DateTime?> lastEndScrollTime,
+    ValueNotifier<DateTime?> lastStartScrollTime,
     ItemScrollController scrollController,
     ItemPositionsListener positionsListener,
     MangaDto manga,
@@ -662,14 +726,17 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
     const scrollCooldown = InfinityContinuousConfig.chapterLoadCooldown;
 
     // Define scroll direction variables
-    final tryingToScrollDown =
-        notification.scrollDelta != null && notification.scrollDelta! > 0;
-    final tryingToScrollUp =
-        notification.scrollDelta != null && notification.scrollDelta! < 0;
+    final rawDelta = notification is ScrollUpdateNotification
+        ? notification.scrollDelta
+        : notification is OverscrollNotification
+            ? notification.overscroll
+            : null;
+    final tryingToScrollDown = rawDelta != null && rawDelta > 0;
+    final tryingToScrollUp = rawDelta != null && rawDelta < 0;
 
     // Enhanced overscroll detection with better stability
     // Use more conservative thresholds to prevent false triggers during chapter loading
-    final scrollDelta = notification.scrollDelta ?? 0.0;
+    final scrollDelta = rawDelta ?? 0.0;
     final isSignificantScroll =
         scrollDelta.abs() > 2.0; // Ignore tiny scroll movements
 
@@ -729,28 +796,20 @@ class InfinityContinuousReaderMode extends HookConsumerWidget {
         nextPrevChapterPair?.second != null) {
       if (lastStartScrollTime.value == null ||
           now.difference(lastStartScrollTime.value!) > scrollCooldown) {
-        // Additional stability check: ensure we're not in the middle of a scroll transition
-        final positions = positionsListener.itemPositions.value.toList();
-        final isStable = positions.isEmpty ||
-            InfinityContinuousUtils.isScrollPositionStable(
-                positions, InfinityContinuousConfig.minVisibleAreaThreshold);
+        final previousChapter = nextPrevChapterPair!.second!;
 
-        if (isStable) {
-          final previousChapter = nextPrevChapterPair!.second!;
-
-          lastStartScrollTime.value = now;
-          InfinityContinuousChapterLoader.loadPreviousChapter(
-            ref,
-            previousChapter,
-            loadedChapters,
-            loadingPrevious,
-            hasReachedStart,
-            scrollController,
-            positionsListener,
-            context,
-            currentVisibleChapter: currentVisibleChapter,
-          );
-        }
+        lastStartScrollTime.value = now;
+        InfinityContinuousChapterLoader.loadPreviousChapter(
+          ref,
+          previousChapter,
+          loadedChapters,
+          loadingPrevious,
+          hasReachedStart,
+          scrollController,
+          positionsListener,
+          context,
+          currentVisibleChapter: currentVisibleChapter,
+        );
       }
     }
 

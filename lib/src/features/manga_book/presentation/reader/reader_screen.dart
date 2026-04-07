@@ -45,6 +45,14 @@ class ReaderScreen extends HookConsumerWidget {
     final ignoreSafeArea = ref.watch(readerIgnoreSafeAreaProvider).ifNull();
 
     final debounce = useRef<Timer?>(null);
+    final mounted = useRef(true);
+
+    useEffect(() {
+      return () {
+        mounted.value = false;
+        debounce.value?.cancel();
+      };
+    }, []);
 
     final updateLastRead = useCallback((int currentPage) async {
       final chapterValue = chapter.valueOrNull;
@@ -68,8 +76,10 @@ class ReaderScreen extends HookConsumerWidget {
             ),
       );
 
-      // Invalidate history to refresh the reading progress
-      ref.invalidate(readingHistoryProvider);
+      // Invalidate history to refresh the reading progress (only if still mounted)
+      if (mounted.value) {
+        ref.invalidate(readingHistoryProvider);
+      }
     }, [chapter.valueOrNull, chapterPages.valueOrNull]);
 
     final onPageChanged = useCallback<AsyncValueSetter<int>>(

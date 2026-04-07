@@ -6,7 +6,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:gap/gap.dart';
-import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../../../../../../utils/extensions/custom_extensions.dart';
 import 'infinity_continuous_config.dart';
@@ -18,7 +17,7 @@ class InfinityContinuousFeedback {
   /// Shows feedback when user tries to scroll past the last chapter
   static void showEndOfMangaFeedback(
     BuildContext context,
-    ObjectRef<DateTime?> lastFeedbackTime,
+    ValueNotifier<DateTime?> lastFeedbackTime,
   ) {
     final now = DateTime.now();
 
@@ -64,7 +63,7 @@ class InfinityContinuousFeedback {
   /// Shows feedback when user tries to scroll past the first chapter
   static void showStartOfMangaFeedback(
     BuildContext context,
-    ObjectRef<DateTime?> lastFeedbackTime,
+    ValueNotifier<DateTime?> lastFeedbackTime,
   ) {
     final now = DateTime.now();
 

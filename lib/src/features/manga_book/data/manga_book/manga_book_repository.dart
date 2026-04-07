@@ -184,6 +184,7 @@ class MangaBookRepository {
               mangaId: mangaId,
             ),
           ),
+          fetchPolicy: FetchPolicy.networkOnly,
         ),
       )
       .getData((data) => data.fetchChapters?.chapters);

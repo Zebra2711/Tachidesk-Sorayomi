@@ -40,11 +40,12 @@ class MangaChapterList extends _$MangaChapterList {
   }
 
   Future<void> refresh([bool onlineFetch = false]) async {
+    final previous = state;
+    state = const AsyncLoading();
     final result = await AsyncValue.guard(
         () => ref.read(mangaBookRepositoryProvider).getChapterList(mangaId));
-    ref.keepAlive();
     if (result.hasError) {
-      state = result.copyWithPrevious(state);
+      state = result.copyWithPrevious(previous);
     } else {
       state = result;
     }

@@ -11,10 +11,12 @@ class InfinityContinuousConfig {
   const InfinityContinuousConfig._();
 
   /// Cooldown period to prevent rapid chapter loading triggers
-  static const Duration chapterLoadCooldown = Duration(milliseconds: 500);
+  /// Increased to reduce aggressive chapter loading during scrolling
+  static const Duration chapterLoadCooldown = Duration(milliseconds: 1000);
 
   /// Tolerance for detecting when scroll position is at min/max extent (in pixels)
-  static const double scrollExtentTolerance = 1.0;
+  /// Increased to reduce false overscroll triggers during smooth scrolling
+  static const double scrollExtentTolerance = 5.0;
 
   /// Higher threshold for user feedback to avoid spam
   static const double feedbackThreshold = 30.0;
